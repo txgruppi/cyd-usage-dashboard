@@ -4,5 +4,5 @@
 #include <TFT_eSPI.h>
 
 namespace screenshot {
-void take(TFT_eSPI &tft, HardwareSerial &out);
+void take(TFT_eSprite &sprite, HardwareSerial &out);
 }

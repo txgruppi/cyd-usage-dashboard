@@ -14,60 +14,69 @@ void serialWriteHex(HardwareSerial &out, const uint8_t *data, size_t len) {
       yield();
     }
     out.write(pair, 2);
-    if ((i & 0xff) == 0) {
-      yield();
-    }
   }
 }
 
-void _take(TFT_eSPI &tft, HardwareSerial &out, uint32_t width, uint32_t height,
-           uint16_t *row565, uint8_t *row) {
-  QoiEncoder encoder(width, height);
+void rgb888From565(uint16_t c, uint8_t *rgb) {
+  const uint8_t r5 = (c >> 11) & 0x1f;
+  const uint8_t g6 = (c >> 5) & 0x3f;
+  const uint8_t b5 = c & 0x1f;
+  rgb[0] = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
+  rgb[1] = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
+  rgb[2] = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
+}
+
+void takeFromSprite(TFT_eSprite &sprite, HardwareSerial &out) {
+  const int width = sprite.width();
+  const int height = sprite.height();
+  if (width <= 0 || height <= 0) {
+    out.println("screenshot: bad size");
+    return;
+  }
+
+  uint8_t *row = static_cast<uint8_t *>(malloc(static_cast<size_t>(width) * 3));
+  if (row == nullptr) {
+    out.println("screenshot: out of memory");
+    return;
+  }
+
+  QoiEncoder encoder(
+      static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+      [&out](const uint8_t *b, size_t n) { serialWriteHex(out, b, n); });
+  if (!encoder.ok()) {
+    out.println("screenshot: encoder init failed");
+    free(row);
+    return;
+  }
+
   for (int y = 0; y < height; y++) {
-    tft.readRect(0, y, width, 1, row565);
     for (int x = 0; x < width; x++) {
-      // readRect returns byte-swapped 565 (pushRect order).
-      uint16_t c = __builtin_bswap16(row565[x]);
-      uint8_t r = (c >> 11) & 0x1f;
-      uint8_t g = (c >> 5) & 0x3f;
-      uint8_t b = c & 0x1f;
-      row[x * 3] = (uint8_t)((r << 3) | (r >> 2));
-      row[x * 3 + 1] = (uint8_t)((g << 2) | (g >> 4));
-      row[x * 3 + 2] = (uint8_t)((b << 3) | (b >> 2));
+      // 0xFFFF is valid (e.g. palette white), not only an OOB sentinel from
+      // readPixel.
+      const uint16_t c = sprite.readPixel(x, y);
+      rgb888From565(c, row + x * 3);
     }
     if (!encoder.encodeRow(row)) {
+      out.println();
       out.printf("screenshot: encode failed at y=%d\n", y);
+      free(row);
       return;
     }
     if ((y & 15) == 0) {
       yield();
     }
   }
-  std::vector<uint8_t> data = encoder.finish();
-  if (data.empty()) {
-    out.println("screenshot: empty");
+
+  free(row);
+  if (!encoder.finish()) {
+    out.println();
+    out.println("screenshot: finish failed");
     return;
   }
-  serialWriteHex(out, data.data(), data.size());
   out.println();
 }
 } // namespace
 
-void screenshot::take(TFT_eSPI &tft, HardwareSerial &out) {
-  auto width = tft.width();
-  auto height = tft.height();
-  uint16_t *row565 = (uint16_t *)malloc(width * sizeof(uint16_t));
-  if (row565 == nullptr) {
-    out.println("screenshot: out of memory");
-    return;
-  }
-  uint8_t *row = (uint8_t *)malloc(width * 3 * sizeof(uint8_t));
-  if (row == nullptr) {
-    out.println("screenshot: out of memory");
-    free(row565);
-    return;
-  }
-  _take(tft, out, width, height, row565, row);
-  free(row565);
-  free(row);
+void screenshot::take(TFT_eSprite &sprite, HardwareSerial &out) {
+  takeFromSprite(sprite, out);
 }
